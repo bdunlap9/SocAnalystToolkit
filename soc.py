@@ -1,10 +1,31 @@
-import argparse, hashlib, requests, urllib.parse, base64, socket, subprocess
+import argparse, hashlib, requests, urllib.parse, base64, socket, subprocess, os
+import pandas as pd
+from elasticsearch import Elasticsearch
 
 class SocAnalystToolkit:
     
-    def __init__(self):
+    def __init__(self, es_host="localhost", es_port=9200, log_path="logs"):
         self.base_url = "https://urlscan.io/api/v1/search/"
         self.headers = {"Content-Type": "application/json"}
+        self.es = Elasticsearch([{"host": es_host, "port": es_port, "scheme": "http"}])
+        self.log_path = log_path
+        self.df = None
+
+    def load_logs(self):
+        log_files = [os.path.join(self.log_path, f) for f in os.listdir(self.log_path) if f.endswith(".log")]
+        logs = []
+        for log_file in log_files:
+            with open(log_file, "r") as f:
+                logs.extend(f.readlines())
+        self.df = pd.DataFrame(logs, columns=["raw"])
+        return self.df
+
+    def parse_logs(self):
+        if self.df is None:
+            self.load_logs()
+        self.df["timestamp"] = self.df["raw"].str.extract(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z)")
+        self.df["message"] = self.df["raw"].str.extract(r"(?<=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z\s).*")
+        return self.df
 
     def url_sanitize(self, url):
         # URL Sanitizing Tool
@@ -132,10 +153,14 @@ class SocAnalystToolkit:
         return data
 
 if __name__ == '__main__':
-    soc = SocAnalystToolkit()
-
     parser = argparse.ArgumentParser(description='SOC Analyst Toolkit')
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
+
+    # Elastic Search
+    elasticsearch_parser = subparsers.add_parser('ElasticSearch', help='ElasticSearch Functions')
+    elasticsearch_parser.add_argument("--es_host", default="localhost", help="Elasticsearch host (default: localhost)")
+    elasticsearch_parser.add_argument("--es_port", default=9200, type=int, help="Elasticsearch port (default: 9200)")
+    elasticsearch_parser.add_argument("--log_path", default="logs", help="Path to log files (default: logs)")
 
     # Sanitize URL's for use in emails
     sanitize_parser = subparsers.add_parser('sanitize', help='URL Sanitizing Tool')
@@ -191,6 +216,8 @@ if __name__ == '__main__':
     hash_file_parser.add_argument('file_path', help='Path to the file to be hashed')
 
     args = parser.parse_args()
+
+    soc = SocAnalystToolkit(es_host=args.es_host, es_port=args.es_port, log_path=args.log_path)
 
     # Check if no arguments were provided and print help message
     if not vars(args):
